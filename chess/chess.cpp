@@ -4,7 +4,7 @@
 #include "mpi.h"
 #include <iostream>
 #include <stack>
-#include <queue>
+#include <list>
 #include <vector>
 
 using namespace std;
@@ -13,6 +13,10 @@ int *buffer, buffer_size;
 int n;
 
 int magic;
+
+bool debug = 0;
+
+#define DEBUG if(debug)printf
 
 class Task
 {
@@ -32,17 +36,20 @@ class Task
 	{
 		cout<<"Solution:"<<endl;
 		for(int i=0; i<n; i++)
-		{
-			bool found = false;
-			for(int j = 0; j<n && !found; j++)
+		{			
+			for(int j = 0; j<n; j++)
+			{
+				bool found = false;
 				for(int k = 0; k<figures.size(); k++)
-					if(figures[i] == make_pair(i, j))
+					if(figures[k] == make_pair(i, j))
 					{
 						cout<<'*';
 						found = true;
 						break;
 					};
-			if(!found) cout<<'.';
+				if(!found) cout<<'.';
+			}
+			
 			cout<<endl;
 		}
 	}
@@ -54,10 +61,18 @@ class Task
 
 		for(int i=0; i<n; i++)
 		{
-			if( b.first == i && b.second == a.second - a.first + i) return true;
-			if( b.second == i && b.first == a.first - a.second + i) return true;
+			if( b.first == i && b.second == a.second - a.first + i){
+				//DEBUG("Diagonal \\\ i = %d n", i);
+				return true;
+			}
+			if( b.second == i && b.first == a.second + a.first - i) 
+			{
+				//DEBUG("Diagonal / i = %d\n", i);
+				return true;
+			}
 		}
 
+		//DEBUG("(%d, %d) doesn't hit (%d, %d)\n", a.first, a.second, b.first, b.second);
 		return false;
 	}
 public:
@@ -68,12 +83,14 @@ public:
 		this->figures = figures;
 		this->free = free;
 		pointer = 0;
+
+		//DEBUG("!!!!!!!!!!!!!!!!!! %s \n", Hit(make_pair(0, 1), make_pair(3, 2))?"Hit":"Doesn't hit");
 	}
 	Task(int *message, int len)
 	{
-		pointer = 0;
+		pointer = message[0];
 		bool figure_list = true;
-		for(int i = 0; i<len; i++)
+		for(int i = 1; i<len; i++)
 			if(message[i] == -1)
 				figure_list = false;
 			else
@@ -81,18 +98,21 @@ public:
 	}
 	Task SubTask() throw(int)
 	{		
-		printf("make from free(%d), figures(%d)\n", free.size(), figures.size());		
+		DEBUG("make from free(%d), figures(%d)\n", free.size(), figures.size());		
 		
 		if(!free.size() && figures.size() == n)
 		{
-			printf("Solution found\n");
+			DEBUG("Solution found\n");
+			for(int i=0; i<figures.size(); i++)
+				DEBUG("(%d, %d)\n", figures[i].first, figures[i].second);
 			Print();
 			throw 0;
 		}
 
 		if(pointer >= free.size())
-		{
-			printf("Can't make subtask\n");
+		{			
+
+			DEBUG("Can't make subtask (%d, %d)\n", pointer, free.size());
 			throw 1;
 		}
 
@@ -109,17 +129,18 @@ public:
 			};
 		pointer++;
 		
-		printf("return: free(%d), figures(%d)\n", new_free.size(), new_figures.size());
+		//DEBUG("return: free(%d), figures(%d)\n", new_free.size(), new_figures.size());
 		return Task(new_figures, new_free);
 	}
 
 	int WriteToBuffer(int *buffer)
 	{
 		int len = 0;
+		buffer[len++] = pointer;		
+
 		for(int i=0; i<figures.size(); i++)
-		{
-			len++;
-			buffer[i] = CalcIndex(figures[i]);
+		{			
+			buffer[len++] = CalcIndex(figures[i]);
 		}
 
 		buffer[len++] = -1;
@@ -142,7 +163,9 @@ int main(int argc,char *argv[])
     
     fprintf(stdout,"Process %d of %d\n",
 	    myid, numprocs);
-    fflush(stdout);    	
+    fflush(stdout);
+
+	if(myid!=2) debug = false;
 
 	if(myid)
 	{
@@ -150,7 +173,7 @@ int main(int argc,char *argv[])
 		
 		MPI_Recv(&n, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
-		buffer_size = n*n+n+1;
+		buffer_size = n*n+n+3;
 		buffer = new int[buffer_size];
 
 		MPI_Recv(buffer, buffer_size, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);	
@@ -187,9 +210,8 @@ int main(int argc,char *argv[])
 
 	}else{
 		//master
-		cin>>n;
-		printf("Master starts working\n");
-		fflush(stdout);
+		cin>>n;	
+		
 		for(int i=1; i<numprocs; i++)		
 			MPI_Send(&n, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
 
@@ -204,21 +226,22 @@ int main(int argc,char *argv[])
 		printf("free(%d)\n", free.size());
 
 		cout<<"Master creates tasks"<<endl;
-		queue<Task> q;
-		Task task(vector<pair<int, int> >(), free);		
+		list<Task> q;
+		q.push_back(Task(vector<pair<int, int> >(), free));		
 		while(q.size()<numprocs - 1)
 		{			
 			try
 			{
-				q.push(task.SubTask());
-				printf("Maked subtask\n");
+				Task task = q.front(); q.pop_front();
+				q.push_back(task.SubTask());
+				DEBUG("Maked subtask\n");
+				q.push_front(task);
 			}
 			catch(int)
 			{
-				if(!q.size()) break;
-				task = q.front(); q.pop();
+				if(!q.size()) break;				
 			}
-		}
+		}		
 
 		cout<<"Master sends tasks ("<<q.size()<<")"<<endl;
 		for(int i=1; i<numprocs; i++)
@@ -230,13 +253,15 @@ int main(int argc,char *argv[])
 				MPI_Send(&end, 1, MPI_INT, i, 0, MPI_COMM_WORLD);	
 				continue;
 			}
-			Task send_task = q.front(); q.pop();
+			Task send_task = q.front(); q.pop_front();
 			int len = send_task.WriteToBuffer(buffer);
 			cout<<"Master sends task to "<<i<<endl;
 
+			
 			for(int j = 0; j<len; j++)
-				cout<<" "<<buffer[i];
+				cout<<" "<<buffer[j];
 			cout<<endl;
+						
 
 			MPI_Send(buffer, len, MPI_INT, i, 0, MPI_COMM_WORLD);
 		}
