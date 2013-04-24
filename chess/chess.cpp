@@ -13,26 +13,6 @@ int n;
 
 #define FAIL_CHECK if(rcode) {MPI_Finalize(); return rcode;}
 
-long long C(int n, int k)
-{
-	if(k>n) throw 1;
-
-	static vector< vector<long long> > c;	
-
-	for(int i = c.size(); i<=n;i++)
-	{
-		c.push_back(vector<long long>(i+1));
-		c[i][0] = 1;
-		for(int j = 1; j<=i; j++)
-		{
-			c[i][j] = c[i-1][j-1];
-			if(j<i) c[i][j] += c[i-1][j];
-		}
-	}
-
-	return c[n][k];
-}
-
 long long min(long long a, long long b)
 {
 	return a<b?a:b;
@@ -42,11 +22,10 @@ class Position
 {
 	vector<int> mas;
 
-	bool Hit(int a, int b)
-	{
-		int n = mas.size();
-		int ax = a / n, ay = a % n;
-		int bx = b / n, by = b % n;
+	bool Hit(int i, int j)
+	{		
+		int ax = i, ay = mas[i];
+		int bx = j, by = mas[j];
 
 		if(ax == bx) return true;
 		if(ay == by) return true;
@@ -59,47 +38,29 @@ class Position
 public:
 	Position(long long n)
 	{
-		int p = 0;
-		int s = ::n*::n;
-		for(int i = 0; i<::n;p++)
+		mas.resize(::n);
+		for(int i = 0; i<mas.size(); i++)
 		{
-			long long count = C(s - p - 1, ::n - i - 1);
-			if(n < count)
-			{
-				mas.push_back(p);
-				i++;				
-			}
-			else			
-			{
-				n-= count;
-			}
+			mas[i] = n%::n;
+			n /= ::n;
 		}
 	}
 	void next_permutation()
-	{
-		int len = mas.size()*mas.size();
-		if(mas.back() < len - 1)
-		{
-			mas.back()++;
-			return;
-		}
-
-		for(int i = mas.size()-2; i>=0; i--)
-		{
-			if(mas[i+1] - mas[i] > 1)
-			{
-				mas[i]++;
-				for(int j = i+1; j<mas.size(); j++)
-					mas[j] = mas[j-1]+1;
-				return;
-			}
-		}
+	{		
+		mas[0]++;
+		for(int i = 0; i<mas.size()-1; i++)
+			if(mas[i]<n) break;
+			else
+			{				
+				mas[i+1] += mas[i] / n;
+				mas[i] %= n;
+			}		
 	}
 	bool Check()
 	{		
 		for(int i = 0; i<mas.size(); i++)
 			for(int j = i+1; j<mas.size(); j++)
-				if(Hit(mas[i], mas[j])) return false;
+				if(Hit(i, j)) return false;
 		return true;
 	}
 	void Print()
@@ -108,19 +69,16 @@ public:
 		cout<<'+';
 		for(int i = 0; i<n; i++) cout<<'-';
 		cout<<'+'<<endl;
-
-		int next = 0;
+		
 		for(int i=0; i<n; i++)
 		{			
 			cout<<'|';
 			for(int j = 0; j<n; j++)
 			{
-				if(next < n && i*n+j == mas[next])
-				{
-					cout<<'*';
-					next++;
-				}
-				else cout<<".";
+				if(mas[i] == j)
+					cout<<'*';	
+				else 
+					cout<<".";
 			}
 			
 			cout<<'|'<<endl;
@@ -130,6 +88,21 @@ public:
 		cout<<'+'<<endl;
 	}
 };
+
+
+long long power(long long x, long long y)
+{
+	if(!y) return 1;
+	long long ans = 1;
+	if(y%2)
+		return power(x, y-1)*x;
+	else
+	{
+		long long s = power(x, y/2);
+		return s*s;
+	}
+}
+
 
 int main(int argc,char *argv[])
 {
@@ -153,7 +126,7 @@ int main(int argc,char *argv[])
 	rcode = MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	FAIL_CHECK;
 
-	long long position_count = C(n*n, n);
+	long long position_count = power(n, n);
 
 	//cout<<"All - "<<position_count<<endl;
 	long long need_count = position_count / numprocs;
@@ -162,8 +135,8 @@ int main(int argc,char *argv[])
 	if(position_count % numprocs > myid)
 		need_count++;
 
-	//cout<<myid<<": ["<<begin<<", "<<begin+need_count<<")"<<endl;
-
+	//cout<<myid<<": ["<<begin<<", "<<begin+need_count<<")"<<endl;	
+	
 	long long counter = 0;
 	Position p(begin);	
 	for(int i = 0; i<need_count; i++, p.next_permutation())
@@ -173,7 +146,13 @@ int main(int argc,char *argv[])
 			p.Print();
 		};
 
-	cout<<"Number of solutions: "<<counter<<endl;
+	long long buf;
+	MPI_Reduce(&counter, &buf, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+	FAIL_CHECK;
+	counter = buf;
+	
+	if(!myid)
+		cout<<"Number of solutions: "<<counter<<endl;	
 
 	rcode = MPI_Finalize();	
     return rcode;
