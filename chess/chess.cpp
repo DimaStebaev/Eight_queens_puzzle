@@ -12,11 +12,10 @@ using namespace std;
 int *buffer, buffer_size;
 int n;
 
-int magic;
-
 bool debug = 0;
-
 #define DEBUG if(debug)printf
+
+#define FAIL_CHECK if(rcode) {MPI_Finalize(); return rcode;}
 
 class Task
 {
@@ -152,128 +151,170 @@ public:
 	}
 };
 
+
+
+long long C(int n, int k)
+{
+	if(k>n) throw 1;
+
+	static vector< vector<long long> > c;	
+
+	for(int i = c.size(); i<=n;i++)
+	{
+		c.push_back(vector<long long>(i+1));
+		c[i][0] = 1;
+		for(int j = 1; j<=i; j++)
+		{
+			c[i][j] = c[i-1][j-1];
+			if(j<i) c[i][j] += c[i-1][j];
+		}
+	}
+
+	return c[n][k];
+}
+
+long long min(long long a, long long b)
+{
+	return a<b?a:b;
+}
+
+class Position
+{
+	vector<int> mas;
+
+	bool Hit(int a, int b)
+	{
+		int n = mas.size();
+		int ax = a / n, ay = a % n;
+		int bx = b / n, by = b % n;
+
+		if(ax == bx) return true;
+		if(ay == by) return true;
+
+		if(ax - ay == bx - by) return true;
+		if(ax + ay == bx + by) return true;
+
+		return false;
+	}
+public:
+	Position(long long n)
+	{
+		int p = 0;
+		int s = ::n*::n;
+		for(int i = 0; i<::n;p++)
+		{
+			long long count = C(s - p - 1, ::n - i - 1);
+			if(n < count)
+			{
+				mas.push_back(p);
+				i++;				
+			}
+			else			
+			{
+				n-= count;
+			}
+		}
+	}
+	void next_permutation()
+	{
+		int len = mas.size()*mas.size();
+		if(mas.back() < len - 1)
+		{
+			mas.back()++;
+			return;
+		}
+
+		for(int i = mas.size()-2; i>=0; i--)
+		{
+			if(mas[i+1] - mas[i] > 1)
+			{
+				mas[i]++;
+				for(int j = i+1; j<mas.size(); j++)
+					mas[j] = mas[j-1]+1;
+				return;
+			}
+		}
+	}
+	bool Check()
+	{		
+		for(int i = 0; i<mas.size(); i++)
+			for(int j = i+1; j<mas.size(); j++)
+				if(Hit(mas[i], mas[j])) return false;
+		return true;
+	}
+	void Print()
+	{
+		//cout<<"Solution:"<<endl;
+		cout<<'+';
+		for(int i = 0; i<n; i++) cout<<'-';
+		cout<<'+'<<endl;
+
+		int next = 0;
+		for(int i=0; i<n; i++)
+		{			
+			cout<<'|';
+			for(int j = 0; j<n; j++)
+			{
+				if(next < n && i*n+j == mas[next])
+				{
+					cout<<'*';
+					next++;
+				}
+				else cout<<".";
+			}
+			
+			cout<<'|'<<endl;
+		}
+		cout<<'+';
+		for(int i = 0; i<n; i++) cout<<'-';
+		cout<<'+'<<endl;
+	}
+};
+
 int main(int argc,char *argv[])
 {
     int myid, numprocs;    
 	MPI_Status status;
 
-    MPI_Init(&argc,&argv);
-    MPI_Comm_size(MPI_COMM_WORLD,&numprocs);
-    MPI_Comm_rank(MPI_COMM_WORLD,&myid);    
+    if(MPI_Init(&argc,&argv)) return -1;
+	int rcode;
+    rcode = MPI_Comm_size(MPI_COMM_WORLD,&numprocs);
+	FAIL_CHECK;
+    rcode = MPI_Comm_rank(MPI_COMM_WORLD,&myid);  
+	FAIL_CHECK;
     
     fprintf(stdout,"Process %d of %d\n",
 	    myid, numprocs);
     fflush(stdout);
 
-	if(myid!=2) debug = false;
+	if(!myid)
+		cin>>n;
 
-	if(myid)
-	{
-		//slave
-		
-		MPI_Recv(&n, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+	rcode = MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	FAIL_CHECK;
 
-		buffer_size = n*n+n+3;
-		buffer = new int[buffer_size];
+	long long position_count = C(n*n, n);
 
-		MPI_Recv(buffer, buffer_size, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);	
+	//cout<<"All - "<<position_count<<endl;
+	long long need_count = position_count / numprocs;
+	long long begin = need_count*myid;	
+	begin+=min(position_count % numprocs, myid);
+	if(position_count % numprocs > myid)
+		need_count++;
 
-		int count;
-		MPI_Get_count(&status, MPI_INT, &count);
-		if(count == 1 && buffer[0] == -1)
+	//cout<<myid<<": ["<<begin<<", "<<begin+need_count<<")"<<endl;
+
+	long long counter = 0;
+	Position p(begin);	
+	for(int i = 0; i<need_count; i++, p.next_permutation())
+		if(p.Check())
 		{
-			cout<<"Slave "<<myid<<": nothing to do"<<endl;
-		}
-		else
-		{
-			cout<<"Slave "<<myid<<" begins working"<<endl;
-			stack<Task> s;
-			s.push(Task(buffer, count));
-			while(s.size())
-			{
-				Task task = s.top(); s.pop();
-				while(true)
-				{
-					try
-					{
-						s.push(task.SubTask());
-					}
-					catch(int)
-					{
-						break;
-					}
-				}
-			}
-			cout<<"Slave "<<myid<<" is ready"<<endl;
-		}		
-		MPI_Send(buffer, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+			counter++;
+			p.Print();
+		};
 
-	}else{
-		//master
-		cin>>n;	
-		
-		for(int i=1; i<numprocs; i++)		
-			MPI_Send(&n, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+	cout<<"Number of solutions: "<<counter<<endl;
 
-		buffer_size = n*n+n+1;
-		buffer = new int[buffer_size];
-
-		vector<pair<int, int> > free;
-		for(int i=0; i<n; i++)
-			for(int j = 0; j<n; j++)
-				free.push_back(make_pair(i, j));
-
-		printf("free(%d)\n", free.size());
-
-		cout<<"Master creates tasks"<<endl;
-		list<Task> q;
-		q.push_back(Task(vector<pair<int, int> >(), free));		
-		while(q.size()<numprocs - 1)
-		{			
-			try
-			{
-				Task task = q.front(); q.pop_front();
-				q.push_back(task.SubTask());
-				DEBUG("Maked subtask\n");
-				q.push_front(task);
-			}
-			catch(int)
-			{
-				if(!q.size()) break;				
-			}
-		}		
-
-		cout<<"Master sends tasks ("<<q.size()<<")"<<endl;
-		for(int i=1; i<numprocs; i++)
-		{
-			if(!q.size())
-			{
-				int end = -1;
-				cout<<"Master sends empty message to "<<i<<endl;
-				MPI_Send(&end, 1, MPI_INT, i, 0, MPI_COMM_WORLD);	
-				continue;
-			}
-			Task send_task = q.front(); q.pop_front();
-			int len = send_task.WriteToBuffer(buffer);
-			cout<<"Master sends task to "<<i<<endl;
-
-			
-			for(int j = 0; j<len; j++)
-				cout<<" "<<buffer[j];
-			cout<<endl;
-						
-
-			MPI_Send(buffer, len, MPI_INT, i, 0, MPI_COMM_WORLD);
-		}
-
-		cout<<"Master waight for slaves"<<endl;
-		for(int i=1; i<numprocs; i++)
-			MPI_Recv(buffer, buffer_size, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-
-		cout<<"Ready"<<endl;
-	}
-    
-	delete buffer;
-    MPI_Finalize();
-    return 0;
+	rcode = MPI_Finalize();	
+    return rcode;
 }
